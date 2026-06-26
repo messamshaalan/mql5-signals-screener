@@ -561,11 +561,25 @@ table.dataTable tbody td{border-color:#1e2530!important;vertical-align:middle;pa
         </div>
       </div>
 
-      <!-- Price + Favorites + Reset -->
+      <!-- Price per month range -->
+      <div class="col-6 col-md-3 col-xl-2">
+        <label>Price USD/mo</label>
+        <div id="priceRange" style="margin:10px 4px 4px"></div>
+        <div class="range-labels"><span id="priceLo">0</span><span id="priceHi">200</span></div>
+        <div class="preset-btns mt-1">
+          <button class="preset-btn" onclick="setRange('price',0,200)">Any</button>
+          <button class="preset-btn" onclick="setRange('price',0,0)">Free only</button>
+          <button class="preset-btn" onclick="setRange('price',1,200)">Paid only</button>
+          <button class="preset-btn" onclick="setRange('price',0,30)">≤$30</button>
+          <button class="preset-btn" onclick="setRange('price',0,50)">≤$50</button>
+        </div>
+      </div>
+
+      <!-- Quick type + Favorites + Reset -->
       <div class="col-12 col-md-6 col-xl-3">
         <div class="row g-2">
           <div class="col-12">
-            <label>Price</label>
+            <label>Quick Price Filter</label>
             <div class="price-filter-group">
               <button class="price-btn active" onclick="setPriceFilter('all',this)">All</button>
               <button class="price-btn" onclick="setPriceFilter('free',this)">Free</button>
@@ -889,7 +903,7 @@ function s2g(v){return v<=0?0:Math.round(Math.pow(10,v*6/100)-1);}
 function g2s(g){return g<=0?0:Math.min(100,Math.log10(g+1)/6*100);}
 function fmtGain(v){const g=Math.round(s2g(v));return g>=999990?'∞':g>=1000?fmtK(g)+'%':g+'%';}
 
-const F={gain:[0,100],dd:[0,100],win:[0,100],pf:[0,10],wk:[0,500],tr:[0,5000],sub:[0,500]};
+const F={gain:[0,100],dd:[0,100],win:[0,100],pf:[0,10],wk:[0,500],tr:[0,5000],sub:[0,500],price:[0,200]};
 
 function mkSlider(id,key,cfg){
   const el=document.getElementById(id);
@@ -910,7 +924,8 @@ mkSlider('winRange','win',{min:0,max:100,start:[0,100], fmt:(v)=>v+'%', cap:'100
 mkSlider('pfRange','pf',  {min:0,max:10, start:[0,10],  step:.1,fmt:(v)=>(+v).toFixed(1),cap:'∞'});
 mkSlider('wkRange','wk',  {min:0,max:500,start:[0,500], cap:'500+'});
 mkSlider('trRange','tr',  {min:0,max:5000,start:[0,5000],step:50,cap:'5K+'});
-mkSlider('subRange','sub',{min:0,max:500,start:[0,500], cap:'500+'});
+mkSlider('subRange','sub',  {min:0,max:500, start:[0,500],  cap:'500+'});
+mkSlider('priceRange','price',{min:0,max:200,start:[0,200],fmt:(v)=>'$'+Math.round(v),cap:'$200+'});
 
 function setGainRange(lo,hi){
   document.getElementById('gainRange').noUiSlider.set([g2s(lo),g2s(Math.min(hi,999999))]);
@@ -958,6 +973,7 @@ function applyFilters(){
   const wkLo=F.wk[0],wkHi=F.wk[1]>=499?Infinity:F.wk[1];
   const trLo=F.tr[0],trHi=F.tr[1]>=4990?Infinity:F.tr[1];
   const subLo=F.sub[0],subHi=F.sub[1]>=499?Infinity:F.sub[1];
+  const priceLo=F.price[0],priceHi=F.price[1]>=199?Infinity:F.price[1];
 
   $.fn.dataTable.ext.search=[];
   $.fn.dataTable.ext.search.push((_,__,___,row)=>{
@@ -977,6 +993,7 @@ function applyFilters(){
     const sub=parseNum(row["Subscribers"]);
     if(sub<subLo||sub>subHi)                           return false;
     const price=parseNum(row["Price (USD/mo)"]);
+    if(price<priceLo||price>priceHi)                   return false;
     if(priceFilter==="free"&&price>0)                  return false;
     if(priceFilter==="paid"&&price===0)                return false;
     return true;
@@ -989,7 +1006,7 @@ function resetFilters(){
   ['gainRange','ddRange','winRange','wkRange','trRange','subRange'].forEach(id=>{
     const el=document.getElementById(id);
     const cfg={gainRange:[0,100],ddRange:[0,100],winRange:[0,100],
-               wkRange:[0,500],trRange:[0,5000],subRange:[0,500]};
+               wkRange:[0,500],trRange:[0,5000],subRange:[0,500],priceRange:[0,200]};
     el.noUiSlider.set(cfg[id]);
   });
   document.getElementById('pfRange').noUiSlider.set([0,10]);
