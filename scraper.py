@@ -286,6 +286,7 @@ def build_html(df: pd.DataFrame, path: str, scraped_at: str):
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
 <link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css">
 <link rel="stylesheet" href="https://cdn.datatables.net/buttons/2.4.2/css/buttons.bootstrap5.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/nouislider@15.8.1/dist/nouislider.min.css">
 <style>
 :root{--bg0:#0d1117;--bg1:#161b22;--bg2:#1c2230;--bdr:#30363d;--blue:#1F4E79;--blue2:#2a6099;
   --txt:#c9d1d9;--txt2:#8b949e;--green:#3fb950;--red:#f85149;--yellow:#d29922;--purple:#bc8cff;}
@@ -398,6 +399,18 @@ table.dataTable tbody td{border-color:#1e2530!important;vertical-align:middle;pa
 .badge-pf{background:#1a1f0d;color:#a3d977;padding:2px 6px;border-radius:4px;font-weight:600;font-size:.74rem;}
 .lnk{color:#58a6ff;font-weight:600;text-decoration:none;}
 .lnk:hover{text-decoration:underline;}
+.fav-star{cursor:pointer;font-size:1rem;color:#30363d;transition:color .15s,transform .15s;user-select:none;display:inline-block;line-height:1;}
+.fav-star:hover{color:#d29922;transform:scale(1.2);}
+.fav-star.fav-on{color:#f0c040;text-shadow:0 0 6px #f0c04066;}
+
+/* NOUISLIDER OVERRIDES */
+.noUi-target{background:var(--bg0);border:1px solid var(--bdr);border-radius:4px;box-shadow:none;}
+.noUi-connect{background:var(--blue2);}
+.noUi-handle{background:#2a6099;border:1px solid #3a80bb;border-radius:3px;box-shadow:none;width:14px!important;height:14px!important;right:-7px!important;top:-5px!important;cursor:ew-resize;}
+.noUi-handle::before,.noUi-handle::after{display:none;}
+.noUi-horizontal{height:4px;}
+.range-labels{display:flex;justify-content:space-between;font-size:.7rem;color:var(--txt2);margin-top:4px;}
+.range-labels span{color:#58a6ff;font-weight:600;}
 
 /* PROGRESS OVERLAY */
 .prog-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:9999;
@@ -427,22 +440,26 @@ table.dataTable tbody td{border-color:#1e2530!important;vertical-align:middle;pa
 <div class="main-wrap">
 
   <div class="section-lbl">⭐ Top Rated Signals <small style="font-size:.65rem;font-weight:400;letter-spacing:0;text-transform:none;color:var(--txt2)">&nbsp;composite score: win rate · profit factor · risk/reward · longevity · popularity</small></div>
-  <div id="topPicksWrap" class="picks-wrap"></div>
+  <div class="row g-3 mb-3">
+    <div class="col-12 col-xl-8">
+      <div id="topPicksWrap" class="picks-wrap" style="margin-bottom:0"></div>
+    </div>
+    <div class="col-12 col-xl-4">
+      <div class="chart-card" style="min-height:260px">
+        <div class="chart-hdr">Radar Comparison &nbsp;<small id="radarLbl" style="font-weight:400;color:var(--txt2)">Top 5 — click legend name to open signal · click card to highlight</small></div>
+        <canvas id="radarChart" style="max-height:300px"></canvas>
+      </div>
+    </div>
+  </div>
 
   <div class="section-lbl">📈 Overview</div>
   <div id="statsRow" class="row g-3 mb-3"></div>
 
   <div class="row g-3 mb-3">
-    <div class="col-12 col-xl-7">
+    <div class="col-12">
       <div class="chart-card">
-        <div class="chart-hdr">Gain % vs Drawdown % &nbsp;<small style="font-weight:400">(bubble size = subscribers · color = win rate)</small></div>
-        <canvas id="scatterChart" style="max-height:320px"></canvas>
-      </div>
-    </div>
-    <div class="col-12 col-xl-5">
-      <div class="chart-card">
-        <div class="chart-hdr">Radar Comparison &nbsp;<small id="radarLbl" style="font-weight:400;color:var(--txt2)">Top 5 signals — click a card to compare</small></div>
-        <canvas id="radarChart" style="max-height:320px"></canvas>
+        <div class="chart-hdr">Gain % vs Drawdown % &nbsp;<small style="font-weight:400">(bubble size = subscribers · color = win rate · updates with filters)</small></div>
+        <canvas id="scatterChart" style="max-height:340px"></canvas>
       </div>
     </div>
   </div>
@@ -451,99 +468,121 @@ table.dataTable tbody td{border-color:#1e2530!important;vertical-align:middle;pa
   <div class="filter-box">
     <div class="row g-3 align-items-start">
 
+      <!-- Gain range (log scale) -->
       <div class="col-12 col-md-6 col-xl-3">
-        <label>Min Gain % &nbsp;<span class="range-val" id="gainVal">0</span>
-          <input type="number" id="gainNum" value="0" min="0" step="500" style="margin-left:6px">
-        </label>
-        <input type="range" id="gainSlider" min="0" max="100" value="0">
-        <div class="preset-btns">
-          <button class="preset-btn" onclick="setGainPreset(0)">Any</button>
-          <button class="preset-btn" onclick="setGainPreset(100)">100%+</button>
-          <button class="preset-btn" onclick="setGainPreset(500)">500%+</button>
-          <button class="preset-btn" onclick="setGainPreset(1000)">1K%+</button>
-          <button class="preset-btn" onclick="setGainPreset(5000)">5K%+</button>
-          <button class="preset-btn" onclick="setGainPreset(10000)">10K%+</button>
-          <button class="preset-btn" onclick="setGainPreset(50000)">50K%+</button>
+        <label>Gain %</label>
+        <div id="gainRange" style="margin:10px 4px 4px"></div>
+        <div class="range-labels"><span id="gainLo">0</span><span id="gainHi">∞</span></div>
+        <div class="preset-btns mt-1">
+          <button class="preset-btn" onclick="setGainRange(0,100)">Any</button>
+          <button class="preset-btn" onclick="setGainRange(100,999999)">100%+</button>
+          <button class="preset-btn" onclick="setGainRange(1000,999999)">1K%+</button>
+          <button class="preset-btn" onclick="setGainRange(10000,999999)">10K%+</button>
+          <button class="preset-btn" onclick="setGainRange(0,1000)">0–1K%</button>
+          <button class="preset-btn" onclick="setGainRange(1000,10000)">1K–10K%</button>
         </div>
       </div>
 
+      <!-- Drawdown range -->
       <div class="col-6 col-md-3 col-xl-2">
-        <label>Max Drawdown % &nbsp;<span class="range-val" id="ddVal">100</span></label>
-        <input type="range" id="ddSlider" min="0" max="100" step="1" value="100">
-        <div class="preset-btns">
-          <button class="preset-btn" onclick="setPlain('ddSlider','ddVal',100)">Any</button>
-          <button class="preset-btn" onclick="setPlain('ddSlider','ddVal',50)">≤50%</button>
-          <button class="preset-btn" onclick="setPlain('ddSlider','ddVal',30)">≤30%</button>
-          <button class="preset-btn" onclick="setPlain('ddSlider','ddVal',20)">≤20%</button>
+        <label>Drawdown %</label>
+        <div id="ddRange" style="margin:10px 4px 4px"></div>
+        <div class="range-labels"><span id="ddLo">0</span><span id="ddHi">100</span></div>
+        <div class="preset-btns mt-1">
+          <button class="preset-btn" onclick="setRange('dd',0,100)">Any</button>
+          <button class="preset-btn" onclick="setRange('dd',0,20)">≤20%</button>
+          <button class="preset-btn" onclick="setRange('dd',0,40)">≤40%</button>
+          <button class="preset-btn" onclick="setRange('dd',40,100)">High DD</button>
         </div>
       </div>
 
+      <!-- Win Rate range -->
       <div class="col-6 col-md-3 col-xl-2">
-        <label>Min Win % &nbsp;<span class="range-val" id="winVal">0</span></label>
-        <input type="range" id="winSlider" min="0" max="100" step="1" value="0">
-        <div class="preset-btns">
-          <button class="preset-btn" onclick="setPlain('winSlider','winVal',0)">Any</button>
-          <button class="preset-btn" onclick="setPlain('winSlider','winVal',50)">50%+</button>
-          <button class="preset-btn" onclick="setPlain('winSlider','winVal',60)">60%+</button>
-          <button class="preset-btn" onclick="setPlain('winSlider','winVal',70)">70%+</button>
+        <label>Win Rate %</label>
+        <div id="winRange" style="margin:10px 4px 4px"></div>
+        <div class="range-labels"><span id="winLo">0</span><span id="winHi">100</span></div>
+        <div class="preset-btns mt-1">
+          <button class="preset-btn" onclick="setRange('win',0,100)">Any</button>
+          <button class="preset-btn" onclick="setRange('win',50,100)">50%+</button>
+          <button class="preset-btn" onclick="setRange('win',60,100)">60%+</button>
+          <button class="preset-btn" onclick="setRange('win',70,100)">70%+</button>
         </div>
       </div>
 
+      <!-- Profit Factor range -->
       <div class="col-6 col-md-3 col-xl-2">
-        <label>Min Profit Factor &nbsp;<span class="range-val" id="pfVal">0.0</span></label>
-        <input type="range" id="pfSlider" min="0" max="30" step="1" value="0">
-        <div class="preset-btns">
-          <button class="preset-btn" onclick="setPF(0)">Any</button>
-          <button class="preset-btn" onclick="setPF(10)">1.0+</button>
-          <button class="preset-btn" onclick="setPF(15)">1.5+</button>
-          <button class="preset-btn" onclick="setPF(20)">2.0+</button>
+        <label>Profit Factor</label>
+        <div id="pfRange" style="margin:10px 4px 4px"></div>
+        <div class="range-labels"><span id="pfLo">0.0</span><span id="pfHi">10.0</span></div>
+        <div class="preset-btns mt-1">
+          <button class="preset-btn" onclick="setRange('pf',0,10)">Any</button>
+          <button class="preset-btn" onclick="setRange('pf',1,10)">1.0+</button>
+          <button class="preset-btn" onclick="setRange('pf',1.5,10)">1.5+</button>
+          <button class="preset-btn" onclick="setRange('pf',2,10)">2.0+</button>
         </div>
       </div>
 
+      <!-- Weeks range -->
       <div class="col-6 col-md-3 col-xl-2">
-        <label>Min Weeks &nbsp;<span class="range-val" id="wkVal">0</span></label>
-        <input type="range" id="wkSlider" min="0" max="500" step="4" value="0">
-        <div class="preset-btns">
-          <button class="preset-btn" onclick="setPlain('wkSlider','wkVal',0)">Any</button>
-          <button class="preset-btn" onclick="setPlain('wkSlider','wkVal',12)">3mo+</button>
-          <button class="preset-btn" onclick="setPlain('wkSlider','wkVal',26)">6mo+</button>
-          <button class="preset-btn" onclick="setPlain('wkSlider','wkVal',52)">1yr+</button>
+        <label>Weeks Active</label>
+        <div id="wkRange" style="margin:10px 4px 4px"></div>
+        <div class="range-labels"><span id="wkLo">0</span><span id="wkHi">500</span></div>
+        <div class="preset-btns mt-1">
+          <button class="preset-btn" onclick="setRange('wk',0,500)">Any</button>
+          <button class="preset-btn" onclick="setRange('wk',12,500)">3mo+</button>
+          <button class="preset-btn" onclick="setRange('wk',26,500)">6mo+</button>
+          <button class="preset-btn" onclick="setRange('wk',52,500)">1yr+</button>
         </div>
       </div>
 
+      <!-- Trades range -->
       <div class="col-6 col-md-3 col-xl-2">
-        <label>Min Trades &nbsp;<span class="range-val" id="trVal">0</span></label>
-        <input type="range" id="trSlider" min="0" max="5000" step="50" value="0">
-        <div class="preset-btns">
-          <button class="preset-btn" onclick="setPlain('trSlider','trVal',0)">Any</button>
-          <button class="preset-btn" onclick="setPlain('trSlider','trVal',50)">50+</button>
-          <button class="preset-btn" onclick="setPlain('trSlider','trVal',200)">200+</button>
-          <button class="preset-btn" onclick="setPlain('trSlider','trVal',500)">500+</button>
+        <label>Trades</label>
+        <div id="trRange" style="margin:10px 4px 4px"></div>
+        <div class="range-labels"><span id="trLo">0</span><span id="trHi">5000</span></div>
+        <div class="preset-btns mt-1">
+          <button class="preset-btn" onclick="setRange('tr',0,5000)">Any</button>
+          <button class="preset-btn" onclick="setRange('tr',50,5000)">50+</button>
+          <button class="preset-btn" onclick="setRange('tr',200,5000)">200+</button>
+          <button class="preset-btn" onclick="setRange('tr',500,5000)">500+</button>
         </div>
       </div>
 
+      <!-- Subscribers range -->
       <div class="col-6 col-md-3 col-xl-2">
-        <label>Min Subscribers &nbsp;<span class="range-val" id="subVal">0</span></label>
-        <input type="range" id="subSlider" min="0" max="500" step="5" value="0">
-        <div class="preset-btns">
-          <button class="preset-btn" onclick="setPlain('subSlider','subVal',0)">Any</button>
-          <button class="preset-btn" onclick="setPlain('subSlider','subVal',10)">10+</button>
-          <button class="preset-btn" onclick="setPlain('subSlider','subVal',50)">50+</button>
-          <button class="preset-btn" onclick="setPlain('subSlider','subVal',100)">100+</button>
+        <label>Subscribers</label>
+        <div id="subRange" style="margin:10px 4px 4px"></div>
+        <div class="range-labels"><span id="subLo">0</span><span id="subHi">500</span></div>
+        <div class="preset-btns mt-1">
+          <button class="preset-btn" onclick="setRange('sub',0,500)">Any</button>
+          <button class="preset-btn" onclick="setRange('sub',10,500)">10+</button>
+          <button class="preset-btn" onclick="setRange('sub',50,500)">50+</button>
+          <button class="preset-btn" onclick="setRange('sub',100,500)">100+</button>
         </div>
       </div>
 
-      <div class="col-6 col-md-3 col-xl-2">
-        <label>Price</label>
-        <div class="price-filter-group">
-          <button class="price-btn active" onclick="setPriceFilter('all',this)">All</button>
-          <button class="price-btn" onclick="setPriceFilter('free',this)">Free</button>
-          <button class="price-btn" onclick="setPriceFilter('paid',this)">Paid</button>
+      <!-- Price + Favorites + Reset -->
+      <div class="col-12 col-md-6 col-xl-3">
+        <div class="row g-2">
+          <div class="col-12">
+            <label>Price</label>
+            <div class="price-filter-group">
+              <button class="price-btn active" onclick="setPriceFilter('all',this)">All</button>
+              <button class="price-btn" onclick="setPriceFilter('free',this)">Free</button>
+              <button class="price-btn" onclick="setPriceFilter('paid',this)">Paid</button>
+            </div>
+          </div>
+          <div class="col-12">
+            <label>Favorites</label>
+            <div class="price-filter-group">
+              <button class="price-btn" id="favFilterBtn" onclick="toggleFavFilter(this)">⭐ Show Favorites</button>
+              <button class="price-btn" onclick="clearAllFavs()" title="Clear all" style="padding:3px 8px">✕</button>
+            </div>
+          </div>
+          <div class="col-12">
+            <button class="btn-reset" onclick="resetFilters()">↺ Reset All Filters</button>
+          </div>
         </div>
-      </div>
-
-      <div class="col-6 col-md-3 col-xl-1 d-flex align-items-start pt-3">
-        <button class="btn-reset" onclick="resetFilters()">↺ Reset</button>
       </div>
 
     </div>
@@ -580,6 +619,7 @@ table.dataTable tbody td{border-color:#1e2530!important;vertical-align:middle;pa
 <script src="https://cdn.datatables.net/buttons/2.4.2/js/buttons.html5.min.js"></script>
 <script src="https://cdn.datatables.net/buttons/2.4.2/js/buttons.print.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/nouislider@15.8.1/dist/nouislider.min.js"></script>
 <script>
 const RAW  = %%ROWS_JSON%%;
 const KEYS = %%COLS_JSON%%;
@@ -718,7 +758,7 @@ function buildRadar(items){
     data:{
       labels:["Win Rate","Profit Factor","Risk/Reward","Track Record","Safety"],
       datasets:items.map(({r},i)=>({
-        label:(r.Name||'').length>20?(r.Name||'').slice(0,19)+'…':(r.Name||'—'),
+        label:(r.Name||'').length>22?(r.Name||'').slice(0,21)+'…':(r.Name||'—'),
         data:scoreAxes(r),
         borderColor:COLORS[i%COLORS.length],
         backgroundColor:COLORS[i%COLORS.length]+"25",
@@ -727,7 +767,16 @@ function buildRadar(items){
     },
     options:{
       responsive:true,maintainAspectRatio:false,animation:{duration:300},
-      plugins:{legend:{labels:{color:"#c9d1d9",font:{size:10},boxWidth:12}}},
+      plugins:{
+        legend:{
+          labels:{color:"#c9d1d9",font:{size:10},boxWidth:12,
+            generateLabels:(chart)=>Chart.defaults.plugins.legend.labels.generateLabels(chart).map(l=>({...l,fontStyle:'underline'}))},
+          onClick:(e,legendItem)=>{
+            const sig=items[legendItem.datasetIndex];
+            if(sig&&sig.r.__link) window.open(sig.r.__link,'_blank');
+          }
+        }
+      },
       scales:{r:{min:0,max:100,
         ticks:{color:"#8b949e",backdropColor:"transparent",stepSize:25,font:{size:9}},
         grid:{color:"#2a3540"},angleLines:{color:"#2a3540"},
@@ -751,6 +800,41 @@ function highlightRadar(i){
   }
 }
 
+// ── Favorites ─────────────────────────────────────────────────────────────────
+let favorites=new Set(JSON.parse(localStorage.getItem('mt5_fav')||'[]'));
+let showFavOnly=false;
+
+function saveFavs(){ localStorage.setItem('mt5_fav',JSON.stringify([...favorites])); }
+
+function toggleFav(id,e){
+  if(e){e.stopPropagation();e.preventDefault();}
+  if(favorites.has(id)) favorites.delete(id); else favorites.add(id);
+  saveFavs();
+  table.draw(false);
+  updateFavBtn();
+}
+
+function clearAllFavs(){
+  if(!favorites.size) return;
+  if(!confirm(`Remove all ${favorites.size} favorites?`)) return;
+  favorites.clear(); saveFavs();
+  table.draw(false); updateFavBtn();
+}
+
+function updateFavBtn(){
+  const btn=document.getElementById('favFilterBtn');
+  if(btn) btn.textContent=`⭐ Show Favorites${favorites.size?' ('+favorites.size+')':''}`;
+  if(showFavOnly&&!favorites.size){ showFavOnly=false; btn&&btn.classList.remove('active'); applyFilters(); }
+}
+
+function toggleFavFilter(btn){
+  showFavOnly=!showFavOnly;
+  btn.classList.toggle('active',showFavOnly);
+  applyFilters();
+}
+
+updateFavBtn();
+
 // ── DataTable ─────────────────────────────────────────────────────────────────
 const NUM_SET=new Set(["Gain %","Drawdown %","Win %","Profit Factor","Expected Payoff",
                         "Weeks","Trades","Subscribers","Subscriber Funds","Balance","Rank"]);
@@ -769,11 +853,19 @@ function makeCol(key){
   return c;
 }
 
-const columns=KEYS.map(makeCol);
+const starCol={
+  title:'★',data:'__id',orderable:false,searchable:false,width:'32px',className:'text-center',
+  render:(id,t)=>{
+    if(!id||t!=='display') return '';
+    return `<span class="fav-star${favorites.has(id)?' fav-on':''}" onclick="toggleFav('${id}',event)" title="${favorites.has(id)?'Remove from':'Add to'} favorites">★</span>`;
+  },
+};
+
+const columns=[starCol,...KEYS.map(makeCol)];
 columns.push({data:"__link",visible:false,searchable:false});
 columns.push({data:"__id",visible:false,searchable:false});
 
-const gainIdx=KEYS.indexOf("Gain %");
+const gainIdx=KEYS.indexOf("Gain %")+1; // +1 for star column
 const table=$('#tbl').DataTable({
   data:RAW,columns,
   pageLength:50,
@@ -792,50 +884,40 @@ const table=$('#tbl').DataTable({
 // Update charts/stats when the DataTable search box filters rows
 table.on('search.dt draw.dt', function(){ updateChartsAndStats(); });
 
-// ── Log-scale gain ────────────────────────────────────────────────────────────
-function s2g(v){return v===0?0:Math.round(Math.pow(10,v*6/100)-1);}
-function g2s(g){return g<=0?0:Math.min(100,Math.round(Math.log10(g+1)/6*100));}
+// ── Dual range sliders (noUiSlider) ──────────────────────────────────────────
+function s2g(v){return v<=0?0:Math.round(Math.pow(10,v*6/100)-1);}
+function g2s(g){return g<=0?0:Math.min(100,Math.log10(g+1)/6*100);}
+function fmtGain(v){const g=Math.round(s2g(v));return g>=999990?'∞':g>=1000?fmtK(g)+'%':g+'%';}
 
-document.getElementById("gainSlider").addEventListener("input",function(){
-  const g=s2g(+this.value);
-  document.getElementById("gainVal").textContent=g>=1000?fmtK(g):g;
-  document.getElementById("gainNum").value=g;
-  applyFilters();
-});
-document.getElementById("gainNum").addEventListener("input",function(){
-  const g=+this.value||0;
-  document.getElementById("gainSlider").value=g2s(g);
-  document.getElementById("gainVal").textContent=g>=1000?fmtK(g):g;
-  applyFilters();
-});
+const F={gain:[0,100],dd:[0,100],win:[0,100],pf:[0,10],wk:[0,500],tr:[0,5000],sub:[0,500]};
 
-// ── Generic sliders ───────────────────────────────────────────────────────────
-[["ddSlider","ddVal"],["winSlider","winVal"],["wkSlider","wkVal"],
- ["trSlider","trVal"],["subSlider","subVal"]].forEach(([id,vid])=>{
-  document.getElementById(id).addEventListener("input",function(){
-    document.getElementById(vid).textContent=this.value;
-    applyFilters();
+function mkSlider(id,key,cfg){
+  const el=document.getElementById(id);
+  noUiSlider.create(el,{start:cfg.start||[cfg.min,cfg.max],connect:true,
+    range:{min:cfg.min,max:cfg.max},step:cfg.step||1});
+  el.noUiSlider.on('update',(v)=>{
+    F[key]=[+v[0],+v[1]];
+    const loEl=document.getElementById(key+'Lo'), hiEl=document.getElementById(key+'Hi');
+    if(loEl) loEl.textContent=cfg.fmt?cfg.fmt(+v[0],true):Math.round(+v[0]);
+    if(hiEl) hiEl.textContent=cfg.fmt?cfg.fmt(+v[1],false):(+v[1]>=cfg.max?(cfg.cap||Math.round(+v[1])):Math.round(+v[1]));
   });
-});
-document.getElementById("pfSlider").addEventListener("input",function(){
-  document.getElementById("pfVal").textContent=(+this.value/10).toFixed(1);
-  applyFilters();
-});
+  el.noUiSlider.on('change',()=>applyFilters());
+}
 
-function setGainPreset(g){
-  document.getElementById("gainSlider").value=g2s(g);
-  document.getElementById("gainNum").value=g;
-  document.getElementById("gainVal").textContent=g>=1000?fmtK(g):g;
+mkSlider('gainRange','gain',{min:0,max:100,start:[0,100],step:.5,fmt:(v)=>fmtGain(v)});
+mkSlider('ddRange','dd',  {min:0,max:100,start:[0,100], fmt:(v)=>v+'%', cap:'100%'});
+mkSlider('winRange','win',{min:0,max:100,start:[0,100], fmt:(v)=>v+'%', cap:'100%'});
+mkSlider('pfRange','pf',  {min:0,max:10, start:[0,10],  step:.1,fmt:(v)=>(+v).toFixed(1),cap:'∞'});
+mkSlider('wkRange','wk',  {min:0,max:500,start:[0,500], cap:'500+'});
+mkSlider('trRange','tr',  {min:0,max:5000,start:[0,5000],step:50,cap:'5K+'});
+mkSlider('subRange','sub',{min:0,max:500,start:[0,500], cap:'500+'});
+
+function setGainRange(lo,hi){
+  document.getElementById('gainRange').noUiSlider.set([g2s(lo),g2s(Math.min(hi,999999))]);
   applyFilters();
 }
-function setPlain(id,vid,v){
-  document.getElementById(id).value=v;
-  document.getElementById(vid).textContent=v;
-  applyFilters();
-}
-function setPF(v){
-  document.getElementById("pfSlider").value=v;
-  document.getElementById("pfVal").textContent=(v/10).toFixed(1);
+function setRange(key,lo,hi){
+  document.getElementById(key+'Range').noUiSlider.set([lo,hi]);
   applyFilters();
 }
 
@@ -851,19 +933,16 @@ function setPriceFilter(mode,btn){
 function updateChartsAndStats(){
   const filtered=[];
   table.rows({filter:"applied"}).data().each(r=>filtered.push(r));
-
   const fg=filtered.map(r=>parseNum(r["Gain %"])).filter(v=>v>0);
   const fd=filtered.map(r=>parseNum(r["Drawdown %"])).filter(v=>v>0);
   const fw=filtered.map(r=>parseNum(r["Win %"])).filter(v=>v>0);
   const fq=filtered.filter(r=>scoreSignal(r)>0).length;
-
   document.getElementById("sv-total").textContent   =filtered.length;
   document.getElementById("sv-median").textContent  =fg.length?fmtK(median(fg))+"%":"—";
   document.getElementById("sv-p95").textContent     =fg.length?fmtK(pctile(fg,95))+"%":"—";
   document.getElementById("sv-dd").textContent      =fd.length?avg(fd).toFixed(1)+"%":"—";
   document.getElementById("sv-win").textContent     =fw.length?avg(fw).toFixed(1)+"%":"—";
   document.getElementById("sv-quality").textContent =fq;
-
   const pts=rowsToScatterPts(filtered);
   scatterChart.data.datasets[0].data=pts;
   scatterChart.data.datasets[0].pointBackgroundColor=ptsToColors(pts);
@@ -872,28 +951,34 @@ function updateChartsAndStats(){
 
 // ── Filter logic ──────────────────────────────────────────────────────────────
 function applyFilters(){
-  const gainS=+document.getElementById("gainSlider").value;
-  const gainN=+document.getElementById("gainNum").value||0;
-  const gainMin=Math.max(s2g(gainS),gainN);
-  const ddMax =+document.getElementById("ddSlider").value;
-  const winMin=+document.getElementById("winSlider").value;
-  const pfMin =+document.getElementById("pfSlider").value/10;
-  const wkMin =+document.getElementById("wkSlider").value;
-  const trMin =+document.getElementById("trSlider").value;
-  const subMin=+document.getElementById("subSlider").value;
+  const gainMin=s2g(F.gain[0]),gainMaxEff=F.gain[1]>=99.9?Infinity:s2g(F.gain[1]);
+  const ddLo=F.dd[0],ddHi=F.dd[1];
+  const winLo=F.win[0],winHi=F.win[1];
+  const pfLo=F.pf[0],pfHi=F.pf[1]>=9.9?Infinity:F.pf[1];
+  const wkLo=F.wk[0],wkHi=F.wk[1]>=499?Infinity:F.wk[1];
+  const trLo=F.tr[0],trHi=F.tr[1]>=4990?Infinity:F.tr[1];
+  const subLo=F.sub[0],subHi=F.sub[1]>=499?Infinity:F.sub[1];
 
   $.fn.dataTable.ext.search=[];
   $.fn.dataTable.ext.search.push((_,__,___,row)=>{
-    if(parseNum(row["Gain %"])<gainMin)       return false;
-    if(parseNum(row["Drawdown %"])>ddMax)      return false;
-    if(parseNum(row["Win %"])<winMin)          return false;
-    if(parseNum(row["Profit Factor"])<pfMin)   return false;
-    if(parseNum(row["Weeks"])<wkMin)           return false;
-    if(parseNum(row["Trades"])<trMin)          return false;
-    if(parseNum(row["Subscribers"])<subMin)    return false;
+    if(showFavOnly&&!favorites.has(row.__id))          return false;
+    const gain=parseNum(row["Gain %"]);
+    if(gain<gainMin||gain>gainMaxEff)                  return false;
+    const dd=parseNum(row["Drawdown %"]);
+    if(dd<ddLo||dd>ddHi)                              return false;
+    const win=parseNum(row["Win %"]);
+    if(win<winLo||win>winHi)                           return false;
+    const pf=parseNum(row["Profit Factor"]);
+    if(pf<pfLo||pf>pfHi)                              return false;
+    const wk=parseNum(row["Weeks"]);
+    if(wk<wkLo||wk>wkHi)                              return false;
+    const tr=parseNum(row["Trades"]);
+    if(tr<trLo||tr>trHi)                              return false;
+    const sub=parseNum(row["Subscribers"]);
+    if(sub<subLo||sub>subHi)                           return false;
     const price=parseNum(row["Price (USD/mo)"]);
-    if(priceFilter==="free"&&price>0)          return false;
-    if(priceFilter==="paid"&&price===0)        return false;
+    if(priceFilter==="free"&&price>0)                  return false;
+    if(priceFilter==="paid"&&price===0)                return false;
     return true;
   });
   table.draw();
@@ -901,25 +986,21 @@ function applyFilters(){
 }
 
 function resetFilters(){
-  document.getElementById("gainSlider").value=0;
-  document.getElementById("gainNum").value=0;
-  document.getElementById("gainVal").textContent="0";
-  document.getElementById("ddSlider").value=100;
-  document.getElementById("ddVal").textContent="100";
-  document.getElementById("winSlider").value=0;
-  document.getElementById("winVal").textContent="0";
-  document.getElementById("pfSlider").value=0;
-  document.getElementById("pfVal").textContent="0.0";
-  document.getElementById("wkSlider").value=0;
-  document.getElementById("wkVal").textContent="0";
-  document.getElementById("trSlider").value=0;
-  document.getElementById("trVal").textContent="0";
-  document.getElementById("subSlider").value=0;
-  document.getElementById("subVal").textContent="0";
+  ['gainRange','ddRange','winRange','wkRange','trRange','subRange'].forEach(id=>{
+    const el=document.getElementById(id);
+    const cfg={gainRange:[0,100],ddRange:[0,100],winRange:[0,100],
+               wkRange:[0,500],trRange:[0,5000],subRange:[0,500]};
+    el.noUiSlider.set(cfg[id]);
+  });
+  document.getElementById('pfRange').noUiSlider.set([0,10]);
   priceFilter="all";
   document.querySelectorAll(".price-btn").forEach((b,i)=>b.classList.toggle("active",i===0));
+  showFavOnly=false;
+  const fb=document.getElementById("favFilterBtn");
+  if(fb) fb.classList.remove("active");
   $.fn.dataTable.ext.search=[];
   table.draw();
+  updateChartsAndStats();
 }
 
 // ── Update button ─────────────────────────────────────────────────────────────
