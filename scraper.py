@@ -152,7 +152,7 @@ def parse_page(html: str, page_num: int) -> list[dict]:
 
 # ── Symbol enrichment ─────────────────────────────────────────────────────────
 
-# Common tradable instruments (sorted longest-first for greedy regex)
+# Ticker symbols (longest-first for greedy regex)
 _KNOWN = [
     "XAUUSD","XAGUSD","XPTUSD","XPDUSD",
     "BTCUSD","ETHUSD","LTCUSD","XRPUSD","BNBUSD","ADAUSD","DOTUSD","SOLUSD",
@@ -172,8 +172,39 @@ _SYMBOL_RE  = re.compile(
     r'\b(' + '|'.join(sorted(_KNOWN, key=len, reverse=True)) + r')\b', re.I
 )
 _SIX_ALPHA  = re.compile(r'^[A-Z]{6}$')
-_SKIP       = {"TRADES","PROFIT","RESULT","ORDERS","WEEKLY","YEARLY","SIGNAL",
+_SKIP_WORDS = {"TRADES","PROFIT","RESULT","ORDERS","WEEKLY","YEARLY","SIGNAL",
                "GROWTH","EQUITY","VOLUME","OPENED","CLOSED","MYFXBO","FXBLUE"}
+
+# English-language aliases → canonical ticker (ordered from most- to least-specific)
+_ALIASES = [
+    (re.compile(r'\b(nas\s*100|nasdaq\s*100|nasdaq100)\b', re.I), "NAS100"),
+    (re.compile(r'\b(s&p\s*500|sp500|spx500|s&p500)\b',   re.I), "SP500"),
+    (re.compile(r'\b(dow\s*jones|dow30|dj30)\b',           re.I), "US30"),
+    (re.compile(r'\b(ger\s*40|dax40|dax30)\b',             re.I), "GER40"),
+    (re.compile(r'\b(uk\s*100|ftse\s*100|footsie)\b',      re.I), "UK100"),
+    (re.compile(r'\b(jp\s*225|nikkei\s*225|jpy\s*225)\b',  re.I), "JPN225"),
+    (re.compile(r'\b(aus\s*200|asx\s*200)\b',              re.I), "AUS200"),
+    (re.compile(r'\b(nasdaq|nas)\b',                        re.I), "NAS100"),
+    (re.compile(r'\b(sp\s*500|s&p|spx)\b',                 re.I), "SP500"),
+    (re.compile(r'\b(dow\b|us\s*30\b)',                     re.I), "US30"),
+    (re.compile(r'\b(dax|ger40|ger30)\b',                   re.I), "GER40"),
+    (re.compile(r'\b(ftse|uk100)\b',                        re.I), "UK100"),
+    (re.compile(r'\b(nikkei)\b',                            re.I), "JPN225"),
+    (re.compile(r'\b(xauusd|gold|golden|xau\b)',            re.I), "XAUUSD"),
+    (re.compile(r'\b(xagusd|silver|xag\b)',                 re.I), "XAGUSD"),
+    (re.compile(r'\b(crude|wti\b|brent\b|oil\b|usoil)\b',  re.I), "USOIL"),
+    (re.compile(r'\b(natural\s*gas|ngas)\b',                re.I), "NGAS"),
+    (re.compile(r'\b(copper)\b',                            re.I), "COPPER"),
+    (re.compile(r'\b(bitcoin|btcusd)\b',                    re.I), "BTCUSD"),
+    (re.compile(r'\b(ethereum|ethusd)\b',                   re.I), "ETHUSD"),
+    (re.compile(r'\b(ripple|xrpusd)\b',                     re.I), "XRPUSD"),
+    (re.compile(r'\b(cable|sterling|gbpusd)\b',             re.I), "GBPUSD"),
+    (re.compile(r'\b(fiber|eurusd)\b',                      re.I), "EURUSD"),
+    (re.compile(r'\b(aussie|audusd)\b',                     re.I), "AUDUSD"),
+    (re.compile(r'\b(kiwi|nzdusd)\b',                       re.I), "NZDUSD"),
+    (re.compile(r'\b(loonie|usdcad)\b',                     re.I), "USDCAD"),
+    (re.compile(r'\b(swissy|usdchf)\b',                     re.I), "USDCHF"),
+]
 
 SYMBOLS_CACHE_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "output", "symbols_cache.json"
@@ -181,60 +212,57 @@ SYMBOLS_CACHE_FILE = os.path.join(
 
 
 def _sym_from_name(name: str) -> str:
-    m = _SYMBOL_RE.search(name or "")
-    return m.group(1).upper() if m else ""
-
-
-def _sym_from_detail(link: str, name: str) -> str:
-    """Scrape one signal detail page and return main instrument."""
-    if not link:
+    """Extract instrument symbol from signal name — no network required."""
+    if not name:
         return ""
-    try:
-        session = requests.Session(impersonate="chrome120")
-        r = session.get(link, headers=HEADERS, timeout=15)
-        if r.status_code != 200:
-            return ""
-        html = r.text
+    # 1. Direct ticker match
+    m = _SYMBOL_RE.search(name)
+    if m:
+        return m.group(1).upper()
+    # 2. English-language aliases
+    for pattern, ticker in _ALIASES:
+        if pattern.search(name):
+            return ticker
+    return ""
 
-        # 1. Signal name heuristic on the detail page title/meta
-        soup = BeautifulSoup(html, "html.parser")
-        for sel, attr in [('meta[property="og:title"]','content'),
-                          ('meta[name="description"]','content'),
-                          ('title', None)]:
-            el = soup.select_one(sel)
-            text = (el.get(attr) if attr else (el.get_text() if el else "")) or ""
-            m = _SYMBOL_RE.search(text)
-            if m:
-                return m.group(1).upper()
 
-        # 2. Script tags — look for "symbol":"EURUSD" patterns
-        for script in soup.find_all("script"):
-            blob = script.string or ""
-            for pat in [r'"symbol"\s*:\s*"([A-Z0-9#._]{3,15})"',
-                        r'"Symbol"\s*:\s*"([A-Z0-9#._]{3,15})"',
-                        r'"instrument"\s*:\s*"([A-Z0-9#._]{3,15})"']:
-                for m in re.finditer(pat, blob):
-                    val = m.group(1).upper().replace("/","").replace("-","").replace("#","")
-                    if val in _KNOWN_SET or (_SIX_ALPHA.match(val) and val not in _SKIP):
-                        return val
+def _sym_from_html(html: str) -> str:
+    """Extract symbol from already-fetched signal detail page HTML."""
+    soup = BeautifulSoup(html, "html.parser")
 
-        # 3. Tables — first column that looks like a ticker
-        for table in soup.find_all("table")[:8]:
-            for row in table.find_all("tr")[1:8]:
-                cells = row.find_all("td")
-                if cells:
-                    val = cells[0].get_text(strip=True).upper().replace("/","").replace("-","").replace(" ","")
-                    if val in _KNOWN_SET or (_SIX_ALPHA.match(val) and val not in _SKIP):
-                        return val
+    # meta title / og:title / description
+    for sel, attr in [('meta[property="og:title"]', 'content'),
+                      ('meta[name="description"]',   'content'),
+                      ('title',                       None)]:
+        el = soup.select_one(sel)
+        text = (el.get(attr) if attr else (el.get_text() if el else "")) or ""
+        m = _SYMBOL_RE.search(text)
+        if m:
+            return m.group(1).upper()
+        for pat, ticker in _ALIASES:
+            if pat.search(text):
+                return ticker
 
-        # 4. Any element with class containing "symbol" or "instrument"
-        for el in soup.find_all(class_=re.compile(r'symbol|instrument', re.I))[:10]:
-            val = el.get_text(strip=True).upper().replace("/","").replace("-","")
-            if val in _KNOWN_SET or _SIX_ALPHA.match(val):
-                return val
-        return ""
-    except Exception:
-        return ""
+    # Script tags — look for "symbol":"EURUSD" patterns
+    for script in soup.find_all("script"):
+        blob = script.string or ""
+        for pat in [r'"symbol"\s*:\s*"([A-Z0-9#._]{3,15})"',
+                    r'"Symbol"\s*:\s*"([A-Z0-9#._]{3,15})"',
+                    r'"instrument"\s*:\s*"([A-Z0-9#._]{3,15})"']:
+            for m2 in re.finditer(pat, blob):
+                val = m2.group(1).upper().replace("/","").replace("-","").replace("#","")
+                if val in _KNOWN_SET or (_SIX_ALPHA.match(val) and val not in _SKIP_WORDS):
+                    return val
+
+    # Tables — first column that looks like a ticker
+    for table in soup.find_all("table")[:8]:
+        for row in table.find_all("tr")[1:8]:
+            cells = row.find_all("td")
+            if cells:
+                val = cells[0].get_text(strip=True).upper().replace("/","").replace("-","").replace(" ","")
+                if val in _KNOWN_SET or (_SIX_ALPHA.match(val) and val not in _SKIP_WORDS):
+                    return val
+    return ""
 
 
 def load_symbol_cache() -> dict:
@@ -253,17 +281,18 @@ def save_symbol_cache(cache: dict):
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
 
-def enrich_with_symbols(signals: list[dict]) -> list[dict]:
+def enrich_with_symbols(signals: list[dict], session=None) -> list[dict]:
     """
     Adds 'Symbol' field to each signal.
-    Phase 1: name heuristic (instant).
-    Phase 2: parallel detail-page scrape for unknowns.
-    Results are cached in output/symbols_cache.json — only run once.
+    Phase 1 (free):   name/alias heuristic — no network.
+    Phase 2 (optional): sequential detail-page fetch using the shared session.
+                         Only runs when session is provided and cache misses remain.
+    Results cached to output/symbols_cache.json — re-used on every Update.
     """
     cache = load_symbol_cache()
     updated = False
 
-    # Phase 1: name heuristic
+    # Phase 1: name heuristic (no network)
     for sig in signals:
         sid = sig.get("Signal ID", "")
         if sid in cache:
@@ -271,37 +300,37 @@ def enrich_with_symbols(signals: list[dict]) -> list[dict]:
         else:
             sym = _sym_from_name(sig.get("Name", ""))
             sig["Symbol"] = sym
+            cache[sid] = sym
             if sym:
-                cache[sid] = sym
                 updated = True
 
-    # Phase 2: parallel detail-page fetch for remaining blanks
-    missing = [sig for sig in signals if not sig.get("Symbol") and sig.get("Link") and sig.get("Signal ID","") not in cache]
-    if missing:
-        print(f"\n  Fetching symbols for {len(missing)} signals ({SYMBOL_WORKERS} workers)…")
-        done_count = [0]
+    found_p1 = sum(1 for s in signals if s.get("Symbol"))
+    print(f"  ✓ Phase 1 (name heuristic): {found_p1}/{len(signals)} symbols found", flush=True)
 
-        def _worker(sig):
-            sym = _sym_from_detail(sig.get("Link",""), sig.get("Name",""))
-            done_count[0] += 1
-            if done_count[0] % 100 == 0 or done_count[0] == len(missing):
-                print(f"    → {done_count[0]}/{len(missing)} detail pages scraped")
-            return sig.get("Signal ID",""), sym
-
-        with ThreadPoolExecutor(max_workers=SYMBOL_WORKERS) as ex:
-            for sid, sym in ex.map(_worker, missing):
-                cache[sid] = sym or ""
-
-        for sig in signals:
-            sid = sig.get("Signal ID","")
-            if not sig.get("Symbol"):
-                sig["Symbol"] = cache.get(sid, "")
+    # Phase 2: sequential detail-page fetch for remaining blanks (only with live session)
+    missing = [s for s in signals
+               if not s.get("Symbol") and s.get("Link") and cache.get(s.get("Signal ID","")) == ""]
+    if session and missing:
+        print(f"  → Phase 2: fetching {len(missing)} detail pages (sequential, {DELAY}s delay)…", flush=True)
+        done = 0
+        for sig in missing:
+            time.sleep(DELAY)
+            html = fetch(session, sig.get("Link",""), retries=2)
+            sid  = sig.get("Signal ID","")
+            sym  = _sym_from_html(html) if html else ""
+            sig["Symbol"] = sym
+            cache[sid] = sym
+            done += 1
+            if done % 50 == 0 or done == len(missing):
+                print(f"    → {done}/{len(missing)} detail pages done", flush=True)
         updated = True
+    elif missing and not session:
+        print(f"  ℹ  {len(missing)} signals have no detectable symbol (skipping detail-page fetch)", flush=True)
 
     if updated:
         save_symbol_cache(cache)
         found = sum(1 for s in signals if s.get("Symbol"))
-        print(f"  ✓ Symbols: {found}/{len(signals)} found  (cache saved)")
+        print(f"  ✓ Total symbols found: {found}/{len(signals)}  (cache saved)", flush=True)
 
     return signals
 
@@ -317,12 +346,13 @@ def warm_up_session(session):
         print(f"  Session warmup skipped: {e}")
 
 
-def scrape_all() -> list[dict]:
-    session     = requests.Session(impersonate="chrome120")
-    all_signals: list[dict] = []
+def scrape_all(session=None) -> tuple[list[dict], object]:
+    if session is None:
+        session = requests.Session(impersonate="chrome120")
+        print("  Warming up session (collecting cookies)...")
+        warm_up_session(session)
 
-    print("  Warming up session (collecting cookies)...")
-    warm_up_session(session)
+    all_signals: list[dict] = []
 
     for page in range(1, TOTAL_PAGES + 1):
         url = page_url(page)
@@ -337,7 +367,7 @@ def scrape_all() -> list[dict]:
         if page < TOTAL_PAGES:
             time.sleep(DELAY)
 
-    return all_signals
+    return all_signals, session
 
 # ── Excel output ───────────────────────────────────────────────────────────────
 
@@ -1264,7 +1294,7 @@ def main():
     print(f"  MT5 Signals Screener  |  {scraped_at}")
     print("=" * 64)
 
-    signals = scrape_all()
+    signals, session = scrape_all()
 
     print("=" * 64)
     print(f"  Total signals collected: {len(signals)}")
@@ -1274,7 +1304,7 @@ def main():
         print("\nNo data scraped — check your connection or MQL5 may be blocking requests.")
         sys.exit(1)
 
-    signals = enrich_with_symbols(signals)
+    signals = enrich_with_symbols(signals, session=session)
 
     df = pd.DataFrame(signals)
     print(f"\n  Generating reports...")

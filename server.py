@@ -14,7 +14,7 @@ from scraper import (
     requests as cffi_requests,
     warm_up_session, page_url, fetch, parse_page,
     build_html, build_excel,
-    load_symbol_cache,
+    enrich_with_symbols,
     TOTAL_PAGES, DELAY,
 )
 import pandas as pd
@@ -97,10 +97,8 @@ def _do_scrape():
             if page < TOTAL_PAGES:
                 time.sleep(DELAY)
 
-        # Apply cached symbols (fetched once by `python scraper.py`, never re-fetched here)
-        sym_cache = load_symbol_cache()
-        for sig in all_signals:
-            sig["Symbol"] = sym_cache.get(str(sig.get("Signal ID", "")), "")
+        # Apply symbols: name heuristic for new signals + cache for known ones (no detail-page fetch)
+        all_signals = enrich_with_symbols(all_signals, session=None)
 
         df         = pd.DataFrame(all_signals)
         scraped_at = datetime.now().strftime("%Y-%m-%d %H:%M")
