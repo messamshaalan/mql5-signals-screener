@@ -173,7 +173,8 @@ _SYMBOL_RE  = re.compile(
 )
 _SIX_ALPHA  = re.compile(r'^[A-Z]{6}$')
 _SKIP_WORDS = {"TRADES","PROFIT","RESULT","ORDERS","WEEKLY","YEARLY","SIGNAL",
-               "GROWTH","EQUITY","VOLUME","OPENED","CLOSED","MYFXBO","FXBLUE"}
+               "GROWTH","EQUITY","VOLUME","OPENED","CLOSED","MYFXBO","FXBLUE",
+               "SYMBOL","INSTRUMENT","CURRENCY","BALANCE","DEPOSIT","ACCOUNT"}
 
 # English-language aliases → canonical ticker (ordered from most- to least-specific)
 _ALIASES = [
@@ -388,7 +389,11 @@ COL_WIDTHS = {
 
 
 def build_excel(df: pd.DataFrame, path: str):
+    if df.empty:
+        return
     cols = [c for c in DISPLAY_COLS if c in df.columns]
+    if not cols:
+        return
     data = df[cols].copy()
 
     wb = Workbook()

@@ -97,6 +97,12 @@ def _do_scrape():
             if page < TOTAL_PAGES:
                 time.sleep(DELAY)
 
+        if not all_signals:
+            with _lock:
+                _state.update(status="error",
+                              message="No signals scraped — MQL5 may be rate-limiting. Wait a few minutes and try again.")
+            return
+
         # Apply symbols: name heuristic for new signals + cache for known ones (no detail-page fetch)
         all_signals = enrich_with_symbols(all_signals, session=None)
 
