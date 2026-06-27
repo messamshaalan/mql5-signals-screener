@@ -16,6 +16,7 @@ from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.utils import get_column_letter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import re
 import json
@@ -29,10 +30,11 @@ if sys.platform == "win32":
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-TOTAL_PAGES = 12
-BASE_URL    = "https://www.mql5.com"
-LIST_URL    = "https://www.mql5.com/en/signals/mt5/list"
-DELAY       = 2.5
+TOTAL_PAGES    = 12
+BASE_URL       = "https://www.mql5.com"
+LIST_URL       = "https://www.mql5.com/en/signals/mt5/list"
+DELAY          = 2.5
+SYMBOL_WORKERS = 10   # parallel detail-page requests for symbol enrichment
 
 HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
@@ -148,6 +150,162 @@ def parse_page(html: str, page_num: int) -> list[dict]:
 
     return signals
 
+# ── Symbol enrichment ─────────────────────────────────────────────────────────
+
+# Common tradable instruments (sorted longest-first for greedy regex)
+_KNOWN = [
+    "XAUUSD","XAGUSD","XPTUSD","XPDUSD",
+    "BTCUSD","ETHUSD","LTCUSD","XRPUSD","BNBUSD","ADAUSD","DOTUSD","SOLUSD",
+    "EURUSD","GBPUSD","USDJPY","USDCHF","AUDUSD","USDCAD","NZDUSD",
+    "EURGBP","EURJPY","EURCAD","EURAUD","EURCHF","EURNZD",
+    "GBPJPY","GBPAUD","GBPCAD","GBPCHF","GBPNZD",
+    "AUDJPY","AUDCAD","AUDCHF","AUDNZD",
+    "CADJPY","CADCHF","CHFJPY","NZDJPY","NZDCAD","NZDCHF",
+    "USDZAR","USDMXN","USDNOK","USDSEK","USDDKK","USDSGD","USDHKD",
+    "USDCNH","USDTRY","USDRUB","USDPLN","USDHUF","USDCZK",
+    "NAS100","US30","US500","SP500","SPX500","USTEC","DOW30",
+    "GER40","GER30","UK100","FRA40","JPN225","AUS200","HK50","EU50",
+    "USOIL","UKOIL","NGAS","COPPER","COFFEE","WHEAT","CORN","SOYBEAN",
+]
+_KNOWN_SET = set(_KNOWN)
+_SYMBOL_RE  = re.compile(
+    r'\b(' + '|'.join(sorted(_KNOWN, key=len, reverse=True)) + r')\b', re.I
+)
+_SIX_ALPHA  = re.compile(r'^[A-Z]{6}$')
+_SKIP       = {"TRADES","PROFIT","RESULT","ORDERS","WEEKLY","YEARLY","SIGNAL",
+               "GROWTH","EQUITY","VOLUME","OPENED","CLOSED","MYFXBO","FXBLUE"}
+
+SYMBOLS_CACHE_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "output", "symbols_cache.json"
+)
+
+
+def _sym_from_name(name: str) -> str:
+    m = _SYMBOL_RE.search(name or "")
+    return m.group(1).upper() if m else ""
+
+
+def _sym_from_detail(link: str, name: str) -> str:
+    """Scrape one signal detail page and return main instrument."""
+    if not link:
+        return ""
+    try:
+        session = requests.Session(impersonate="chrome120")
+        r = session.get(link, headers=HEADERS, timeout=15)
+        if r.status_code != 200:
+            return ""
+        html = r.text
+
+        # 1. Signal name heuristic on the detail page title/meta
+        soup = BeautifulSoup(html, "html.parser")
+        for sel, attr in [('meta[property="og:title"]','content'),
+                          ('meta[name="description"]','content'),
+                          ('title', None)]:
+            el = soup.select_one(sel)
+            text = (el.get(attr) if attr else (el.get_text() if el else "")) or ""
+            m = _SYMBOL_RE.search(text)
+            if m:
+                return m.group(1).upper()
+
+        # 2. Script tags — look for "symbol":"EURUSD" patterns
+        for script in soup.find_all("script"):
+            blob = script.string or ""
+            for pat in [r'"symbol"\s*:\s*"([A-Z0-9#._]{3,15})"',
+                        r'"Symbol"\s*:\s*"([A-Z0-9#._]{3,15})"',
+                        r'"instrument"\s*:\s*"([A-Z0-9#._]{3,15})"']:
+                for m in re.finditer(pat, blob):
+                    val = m.group(1).upper().replace("/","").replace("-","").replace("#","")
+                    if val in _KNOWN_SET or (_SIX_ALPHA.match(val) and val not in _SKIP):
+                        return val
+
+        # 3. Tables — first column that looks like a ticker
+        for table in soup.find_all("table")[:8]:
+            for row in table.find_all("tr")[1:8]:
+                cells = row.find_all("td")
+                if cells:
+                    val = cells[0].get_text(strip=True).upper().replace("/","").replace("-","").replace(" ","")
+                    if val in _KNOWN_SET or (_SIX_ALPHA.match(val) and val not in _SKIP):
+                        return val
+
+        # 4. Any element with class containing "symbol" or "instrument"
+        for el in soup.find_all(class_=re.compile(r'symbol|instrument', re.I))[:10]:
+            val = el.get_text(strip=True).upper().replace("/","").replace("-","")
+            if val in _KNOWN_SET or _SIX_ALPHA.match(val):
+                return val
+        return ""
+    except Exception:
+        return ""
+
+
+def load_symbol_cache() -> dict:
+    if os.path.exists(SYMBOLS_CACHE_FILE):
+        try:
+            with open(SYMBOLS_CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_symbol_cache(cache: dict):
+    os.makedirs(os.path.dirname(SYMBOLS_CACHE_FILE), exist_ok=True)
+    with open(SYMBOLS_CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False, indent=2)
+
+
+def enrich_with_symbols(signals: list[dict]) -> list[dict]:
+    """
+    Adds 'Symbol' field to each signal.
+    Phase 1: name heuristic (instant).
+    Phase 2: parallel detail-page scrape for unknowns.
+    Results are cached in output/symbols_cache.json — only run once.
+    """
+    cache = load_symbol_cache()
+    updated = False
+
+    # Phase 1: name heuristic
+    for sig in signals:
+        sid = sig.get("Signal ID", "")
+        if sid in cache:
+            sig["Symbol"] = cache[sid]
+        else:
+            sym = _sym_from_name(sig.get("Name", ""))
+            sig["Symbol"] = sym
+            if sym:
+                cache[sid] = sym
+                updated = True
+
+    # Phase 2: parallel detail-page fetch for remaining blanks
+    missing = [sig for sig in signals if not sig.get("Symbol") and sig.get("Link") and sig.get("Signal ID","") not in cache]
+    if missing:
+        print(f"\n  Fetching symbols for {len(missing)} signals ({SYMBOL_WORKERS} workers)…")
+        done_count = [0]
+
+        def _worker(sig):
+            sym = _sym_from_detail(sig.get("Link",""), sig.get("Name",""))
+            done_count[0] += 1
+            if done_count[0] % 100 == 0 or done_count[0] == len(missing):
+                print(f"    → {done_count[0]}/{len(missing)} detail pages scraped")
+            return sig.get("Signal ID",""), sym
+
+        with ThreadPoolExecutor(max_workers=SYMBOL_WORKERS) as ex:
+            for sid, sym in ex.map(_worker, missing):
+                cache[sid] = sym or ""
+
+        for sig in signals:
+            sid = sig.get("Signal ID","")
+            if not sig.get("Symbol"):
+                sig["Symbol"] = cache.get(sid, "")
+        updated = True
+
+    if updated:
+        save_symbol_cache(cache)
+        found = sum(1 for s in signals if s.get("Symbol"))
+        print(f"  ✓ Symbols: {found}/{len(signals)} found  (cache saved)")
+
+    return signals
+
+
 # ── Scraper ────────────────────────────────────────────────────────────────────
 
 def warm_up_session(session):
@@ -184,17 +342,17 @@ def scrape_all() -> list[dict]:
 # ── Excel output ───────────────────────────────────────────────────────────────
 
 DISPLAY_COLS = [
-    "Rank", "Signal ID", "Name", "Author", "Price (USD/mo)", "Gain %", "Drawdown %",
+    "Rank", "Signal ID", "Name", "Author", "Symbol", "Price (USD/mo)", "Gain %", "Drawdown %",
     "Win %", "Profit Factor", "Expected Payoff", "Subscribers",
     "Subscriber Funds", "Balance", "Weeks", "Trades", "EA %",
     "Activity %", "Leverage", "Link",
 ]
 
 COL_WIDTHS = {
-    "Rank": 6, "Signal ID": 10, "Name": 32, "Author": 20, "Price (USD/mo)": 14,
-    "Gain %": 14, "Drawdown %": 12, "Win %": 9, "Profit Factor": 13,
-    "Expected Payoff": 16, "Subscribers": 13, "Subscriber Funds": 16,
-    "Balance": 14, "Weeks": 8, "Trades": 8, "EA %": 7,
+    "Rank": 6, "Signal ID": 10, "Name": 32, "Author": 20, "Symbol": 10,
+    "Price (USD/mo)": 14, "Gain %": 14, "Drawdown %": 12, "Win %": 9,
+    "Profit Factor": 13, "Expected Payoff": 16, "Subscribers": 13,
+    "Subscriber Funds": 16, "Balance": 14, "Weeks": 8, "Trades": 8, "EA %": 7,
     "Activity %": 11, "Leverage": 10, "Link": 10,
 }
 
@@ -256,7 +414,7 @@ def build_excel(df: pd.DataFrame, path: str):
 # ── HTML output ────────────────────────────────────────────────────────────────
 
 HTML_DISPLAY = [
-    "Rank", "Signal ID", "Name", "Author", "Price (USD/mo)", "Gain %", "Drawdown %",
+    "Rank", "Signal ID", "Name", "Author", "Symbol", "Price (USD/mo)", "Gain %", "Drawdown %",
     "Win %", "Profit Factor", "Expected Payoff", "Subscribers",
     "Subscriber Funds", "Balance", "Weeks", "Trades", "EA %",
     "Activity %", "Leverage",
@@ -397,6 +555,7 @@ table.dataTable tbody td{border-color:#1e2530!important;vertical-align:middle;pa
 .badge-dd{background:#2b0d0d;color:#f85149;padding:2px 6px;border-radius:4px;font-weight:600;font-size:.74rem;}
 .badge-win{background:#0d1f2b;color:#58a6ff;padding:2px 6px;border-radius:4px;font-weight:600;font-size:.74rem;}
 .badge-pf{background:#1a1f0d;color:#a3d977;padding:2px 6px;border-radius:4px;font-weight:600;font-size:.74rem;}
+.badge-sym{background:#1a1228;color:#c792ea;padding:2px 7px;border-radius:4px;font-weight:700;font-size:.72rem;letter-spacing:.5px;font-family:monospace;}
 .lnk{color:#58a6ff;font-weight:600;text-decoration:none;}
 .lnk:hover{text-decoration:underline;}
 .fav-star{cursor:pointer;font-size:1rem;color:#30363d;transition:color .15s,transform .15s;user-select:none;display:inline-block;line-height:1;}
@@ -572,6 +731,22 @@ table.dataTable tbody td{border-color:#1e2530!important;vertical-align:middle;pa
           <button class="preset-btn" onclick="setRange('price',1,200)">Paid only</button>
           <button class="preset-btn" onclick="setRange('price',0,30)">≤$30</button>
           <button class="preset-btn" onclick="setRange('price',0,50)">≤$50</button>
+        </div>
+      </div>
+
+      <!-- Symbol filter -->
+      <div class="col-6 col-md-3 col-xl-2">
+        <label>Symbol / Instrument</label>
+        <input id="symInput" type="text" placeholder="e.g. EURUSD, XAU…"
+               oninput="applyFilters()"
+               style="width:100%;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;
+                      border-radius:6px;padding:7px 10px;font-size:0.85rem;margin-top:6px;box-sizing:border-box">
+        <div class="preset-btns mt-1">
+          <button class="preset-btn" onclick="setSym('')">Any</button>
+          <button class="preset-btn" onclick="setSym('USD')">USD</button>
+          <button class="preset-btn" onclick="setSym('XAU')">Gold</button>
+          <button class="preset-btn" onclick="setSym('JPY')">JPY</button>
+          <button class="preset-btn" onclick="setSym('BTC')">BTC</button>
         </div>
       </div>
 
@@ -857,6 +1032,9 @@ function makeCol(key){
   if(key==="Name"){
     c.render=(d,t,r)=>t==="display"&&r.__link?`<a class="lnk" href="${r.__link}" target="_blank">${d}</a>`:d;
     c.width="180px";
+  } else if(key==="Symbol"){
+    c.render=(d,t)=>t==="display"&&d?`<span class="badge-sym">${d}</span>`:d||"";
+    c.width="90px";
   } else if(NUM_SET.has(key)){
     const badge=key==="Gain %"?"badge-gain":key==="Drawdown %"?"badge-dd":key==="Win %"?"badge-win":key==="Profit Factor"?"badge-pf":null;
     c.render=(d,t)=>{
@@ -944,6 +1122,11 @@ function setPriceFilter(mode,btn){
   applyFilters();
 }
 
+function setSym(val){
+  document.getElementById('symInput').value=val;
+  applyFilters();
+}
+
 // ── Live stats + chart update ─────────────────────────────────────────────────
 function updateChartsAndStats(){
   const filtered=[];
@@ -975,6 +1158,8 @@ function applyFilters(){
   const subLo=F.sub[0],subHi=F.sub[1]>=499?Infinity:F.sub[1];
   const priceLo=F.price[0],priceHi=F.price[1]>=199?Infinity:F.price[1];
 
+  const symQuery=(document.getElementById('symInput')||{value:''}).value.trim().toUpperCase();
+
   $.fn.dataTable.ext.search=[];
   $.fn.dataTable.ext.search.push((_,__,___,row)=>{
     if(showFavOnly&&!favorites.has(row.__id))          return false;
@@ -996,6 +1181,7 @@ function applyFilters(){
     if(price<priceLo||price>priceHi)                   return false;
     if(priceFilter==="free"&&price>0)                  return false;
     if(priceFilter==="paid"&&price===0)                return false;
+    if(symQuery&&!(row["Symbol"]||"").toUpperCase().includes(symQuery)) return false;
     return true;
   });
   table.draw();
@@ -1015,6 +1201,8 @@ function resetFilters(){
   showFavOnly=false;
   const fb=document.getElementById("favFilterBtn");
   if(fb) fb.classList.remove("active");
+  const si=document.getElementById("symInput");
+  if(si) si.value="";
   $.fn.dataTable.ext.search=[];
   table.draw();
   updateChartsAndStats();
@@ -1085,6 +1273,8 @@ def main():
     if not signals:
         print("\nNo data scraped — check your connection or MQL5 may be blocking requests.")
         sys.exit(1)
+
+    signals = enrich_with_symbols(signals)
 
     df = pd.DataFrame(signals)
     print(f"\n  Generating reports...")
