@@ -37,8 +37,15 @@ _lock = threading.Lock()
 def _latest_html():
     if not os.path.exists(_OUT):
         return None
-    files = sorted([f for f in os.listdir(_OUT) if f.endswith(".html")], reverse=True)
-    return os.path.join(_OUT, files[0]) if files else None
+    # Sort newest-first, skip files < 100 KB (empty/failed scrapes)
+    candidates = sorted(
+        [f for f in os.listdir(_OUT) if f.endswith(".html")], reverse=True
+    )
+    for name in candidates:
+        p = os.path.join(_OUT, name)
+        if os.path.getsize(p) > 100_000:
+            return p
+    return None
 
 
 @app.route("/")
