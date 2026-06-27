@@ -114,10 +114,18 @@ def parse_page(html: str, page_num: int) -> list[dict]:
         btn       = div.find("div", class_="button")
         signal_id = btn.get("data-id", "") if btn else ""
 
-        gain_raw = _col(div, "col-growth")
-        dd_raw   = _col(div, "col-drawdown")
-        win_raw  = _col(div, "col-plus")
-        pf_raw   = _col(div, "col-pf")
+        gain_raw  = _col(div, "col-growth")
+        dd_raw    = _col(div, "col-drawdown")
+        win_raw   = _col(div, "col-plus")
+        pf_raw    = _col(div, "col-pf")
+        weeks_raw = _col(div, "col-weeks")
+        gain_num  = to_float(gain_raw)
+        weeks_num = max(to_float(weeks_raw), 1.0)
+
+        # Normalised performance (compound monthly/annual rate)
+        _g = gain_num / 100.0
+        _monthly_r = ((1 + _g) ** (1.0 / (weeks_num / 4.333)) - 1) * 100
+        _annual_r  = ((1 + _g) ** (52.0 / weeks_num) - 1) * 100
 
         record = {
             "Rank":             _col(div, "col-num"),
@@ -127,13 +135,17 @@ def parse_page(html: str, page_num: int) -> list[dict]:
             "Link":             link,
             "Price (USD/mo)":   _col(div, "col-price"),
             "Gain %":           gain_raw,
-            "Gain_num":         to_float(gain_raw),
+            "Gain_num":         gain_num,
+            "Monthly %":        f"{_monthly_r:.2f}%",
+            "Monthly_num":      round(_monthly_r, 4),
+            "Annual %":         f"{_annual_r:.1f}%",
+            "Annual_num":       round(_annual_r, 2),
             "Drawdown %":       dd_raw,
             "Drawdown_num":     to_float(dd_raw),
             "Subscribers":      _col(div, "col-subscribers"),
             "Subscriber Funds": _col(div, "col-facilities"),
             "Balance":          _col(div, "col-balance"),
-            "Weeks":            _col(div, "col-weeks"),
+            "Weeks":            weeks_raw,
             "EA %":             _col(div, "col-experts"),
             "Trades":           _col(div, "col-trades"),
             "Win %":            win_raw,
@@ -373,17 +385,19 @@ def scrape_all(session=None) -> tuple[list[dict], object]:
 # ── Excel output ───────────────────────────────────────────────────────────────
 
 DISPLAY_COLS = [
-    "Rank", "Signal ID", "Name", "Author", "Symbol", "Price (USD/mo)", "Gain %", "Drawdown %",
-    "Win %", "Profit Factor", "Expected Payoff", "Subscribers",
+    "Rank", "Signal ID", "Name", "Author", "Symbol", "Price (USD/mo)",
+    "Monthly %", "Annual %", "Gain %",
+    "Drawdown %", "Win %", "Profit Factor", "Expected Payoff", "Subscribers",
     "Subscriber Funds", "Balance", "Weeks", "Trades", "EA %",
     "Activity %", "Leverage", "Link",
 ]
 
 COL_WIDTHS = {
     "Rank": 6, "Signal ID": 10, "Name": 32, "Author": 20, "Symbol": 10,
-    "Price (USD/mo)": 14, "Gain %": 14, "Drawdown %": 12, "Win %": 9,
-    "Profit Factor": 13, "Expected Payoff": 16, "Subscribers": 13,
-    "Subscriber Funds": 16, "Balance": 14, "Weeks": 8, "Trades": 8, "EA %": 7,
+    "Price (USD/mo)": 14, "Monthly %": 12, "Annual %": 12, "Gain %": 14,
+    "Drawdown %": 12, "Win %": 9, "Profit Factor": 13,
+    "Expected Payoff": 16, "Subscribers": 13, "Subscriber Funds": 16,
+    "Balance": 14, "Weeks": 8, "Trades": 8, "EA %": 7,
     "Activity %": 11, "Leverage": 10, "Link": 10,
 }
 
@@ -449,8 +463,9 @@ def build_excel(df: pd.DataFrame, path: str):
 # ── HTML output ────────────────────────────────────────────────────────────────
 
 HTML_DISPLAY = [
-    "Rank", "Signal ID", "Name", "Author", "Symbol", "Price (USD/mo)", "Gain %", "Drawdown %",
-    "Win %", "Profit Factor", "Expected Payoff", "Subscribers",
+    "Rank", "Signal ID", "Name", "Author", "Symbol", "Price (USD/mo)",
+    "Monthly %", "Annual %", "Gain %",
+    "Drawdown %", "Win %", "Profit Factor", "Expected Payoff", "Subscribers",
     "Subscriber Funds", "Balance", "Weeks", "Trades", "EA %",
     "Activity %", "Leverage",
 ]
@@ -591,6 +606,8 @@ table.dataTable tbody td{border-color:#1e2530!important;vertical-align:middle;pa
 .badge-win{background:#0d1f2b;color:#58a6ff;padding:2px 6px;border-radius:4px;font-weight:600;font-size:.74rem;}
 .badge-pf{background:#1a1f0d;color:#a3d977;padding:2px 6px;border-radius:4px;font-weight:600;font-size:.74rem;}
 .badge-sym{background:#1a1228;color:#c792ea;padding:2px 7px;border-radius:4px;font-weight:700;font-size:.72rem;letter-spacing:.5px;font-family:monospace;}
+.badge-monthly{background:#0d2233;color:#79c0ff;padding:2px 6px;border-radius:4px;font-weight:700;font-size:.74rem;}
+.badge-annual{background:#162032;color:#56d364;padding:2px 6px;border-radius:4px;font-weight:700;font-size:.74rem;}
 .lnk{color:#58a6ff;font-weight:600;text-decoration:none;}
 .lnk:hover{text-decoration:underline;}
 .fav-star{cursor:pointer;font-size:1rem;color:#30363d;transition:color .15s,transform .15s;user-select:none;display:inline-block;line-height:1;}
@@ -662,9 +679,23 @@ table.dataTable tbody td{border-color:#1e2530!important;vertical-align:middle;pa
   <div class="filter-box">
     <div class="row g-3 align-items-start">
 
-      <!-- Gain range (log scale) -->
+      <!-- Monthly % range -->
+      <div class="col-6 col-md-3 col-xl-2">
+        <label>Monthly % <span style="font-size:.68rem;color:var(--txt2)">(CAGR/mo)</span></label>
+        <div id="moRange" style="margin:10px 4px 4px"></div>
+        <div class="range-labels"><span id="moLo">0%</span><span id="moHi">∞</span></div>
+        <div class="preset-btns mt-1">
+          <button class="preset-btn" onclick="setRange('mo',0,500)">Any</button>
+          <button class="preset-btn" onclick="setRange('mo',5,500)">5%+</button>
+          <button class="preset-btn" onclick="setRange('mo',10,500)">10%+</button>
+          <button class="preset-btn" onclick="setRange('mo',20,500)">20%+</button>
+          <button class="preset-btn" onclick="setRange('mo',0,20)">0–20%</button>
+        </div>
+      </div>
+
+      <!-- Gain range (log scale, total all-time) -->
       <div class="col-12 col-md-6 col-xl-3">
-        <label>Gain %</label>
+        <label>Total Gain % <span style="font-size:.68rem;color:var(--txt2)">(all time)</span></label>
         <div id="gainRange" style="margin:10px 4px 4px"></div>
         <div class="range-labels"><span id="gainLo">0</span><span id="gainHi">∞</span></div>
         <div class="preset-btns mt-1">
@@ -1060,7 +1091,8 @@ function toggleFavFilter(btn){
 updateFavBtn();
 
 // ── DataTable ─────────────────────────────────────────────────────────────────
-const NUM_SET=new Set(["Gain %","Drawdown %","Win %","Profit Factor","Expected Payoff",
+const NUM_SET=new Set(["Monthly %","Annual %","Gain %","Drawdown %","Win %",
+                        "Profit Factor","Expected Payoff",
                         "Weeks","Trades","Subscribers","Subscriber Funds","Balance","Rank"]);
 function makeCol(key){
   const c={title:key,data:key,defaultContent:""};
@@ -1071,7 +1103,9 @@ function makeCol(key){
     c.render=(d,t)=>t==="display"&&d?`<span class="badge-sym">${d}</span>`:d||"";
     c.width="90px";
   } else if(NUM_SET.has(key)){
-    const badge=key==="Gain %"?"badge-gain":key==="Drawdown %"?"badge-dd":key==="Win %"?"badge-win":key==="Profit Factor"?"badge-pf":null;
+    const badge=key==="Monthly %"?"badge-monthly":key==="Annual %"?"badge-annual":
+                key==="Gain %"?"badge-gain":key==="Drawdown %"?"badge-dd":
+                key==="Win %"?"badge-win":key==="Profit Factor"?"badge-pf":null;
     c.render=(d,t)=>{
       if(t==="sort"||t==="type") return parseNum(d);
       return badge?`<span class="${badge}">${d}</span>`:d;
@@ -1092,12 +1126,13 @@ const columns=[starCol,...KEYS.map(makeCol)];
 columns.push({data:"__link",visible:false,searchable:false});
 columns.push({data:"__id",visible:false,searchable:false});
 
-const gainIdx=KEYS.indexOf("Gain %")+1; // +1 for star column
+const gainIdx=KEYS.indexOf("Gain %")+1;       // +1 for star column
+const monthlyIdx=KEYS.indexOf("Monthly %")+1; // default sort
 const table=$('#tbl').DataTable({
   data:RAW,columns,
   pageLength:50,
   lengthMenu:[[25,50,100,250,-1],[25,50,100,250,"All"]],
-  order:[[gainIdx>=0?gainIdx:0,"desc"]],
+  order:[[monthlyIdx>0?monthlyIdx:gainIdx>0?gainIdx:1,"desc"]],
   dom:'<"row mb-2"<"col-sm-6"B><"col-sm-6"f>>rt<"row mt-2"<"col-sm-5"i><"col-sm-7"p>>',
   buttons:[
     {extend:"csvHtml5",  text:"⬇ CSV",   className:"btn btn-sm"},
@@ -1116,7 +1151,7 @@ function s2g(v){return v<=0?0:Math.round(Math.pow(10,v*6/100)-1);}
 function g2s(g){return g<=0?0:Math.min(100,Math.log10(g+1)/6*100);}
 function fmtGain(v){const g=Math.round(s2g(v));return g>=999990?'∞':g>=1000?fmtK(g)+'%':g+'%';}
 
-const F={gain:[0,100],dd:[0,100],win:[0,100],pf:[0,10],wk:[0,500],tr:[0,5000],sub:[0,500],price:[0,200]};
+const F={mo:[0,500],gain:[0,100],dd:[0,100],win:[0,100],pf:[0,10],wk:[0,500],tr:[0,5000],sub:[0,500],price:[0,200]};
 
 function mkSlider(id,key,cfg){
   const el=document.getElementById(id);
@@ -1131,6 +1166,7 @@ function mkSlider(id,key,cfg){
   el.noUiSlider.on('change',()=>applyFilters());
 }
 
+mkSlider('moRange','mo',  {min:0,max:500,start:[0,500],step:1,fmt:(v)=>Math.round(v)+'%',cap:'∞'});
 mkSlider('gainRange','gain',{min:0,max:100,start:[0,100],step:.5,fmt:(v)=>fmtGain(v)});
 mkSlider('ddRange','dd',  {min:0,max:100,start:[0,100], fmt:(v)=>v+'%', cap:'100%'});
 mkSlider('winRange','win',{min:0,max:100,start:[0,100], fmt:(v)=>v+'%', cap:'100%'});
@@ -1184,6 +1220,7 @@ function updateChartsAndStats(){
 
 // ── Filter logic ──────────────────────────────────────────────────────────────
 function applyFilters(){
+  const moLo=F.mo[0],moHi=F.mo[1]>=499?Infinity:F.mo[1];
   const gainMin=s2g(F.gain[0]),gainMaxEff=F.gain[1]>=99.9?Infinity:s2g(F.gain[1]);
   const ddLo=F.dd[0],ddHi=F.dd[1];
   const winLo=F.win[0],winHi=F.win[1];
@@ -1198,6 +1235,8 @@ function applyFilters(){
   $.fn.dataTable.ext.search=[];
   $.fn.dataTable.ext.search.push((_,__,___,row)=>{
     if(showFavOnly&&!favorites.has(row.__id))          return false;
+    const mo=parseNum(row["Monthly %"]);
+    if(mo<moLo||mo>moHi)                              return false;
     const gain=parseNum(row["Gain %"]);
     if(gain<gainMin||gain>gainMaxEff)                  return false;
     const dd=parseNum(row["Drawdown %"]);
@@ -1224,9 +1263,9 @@ function applyFilters(){
 }
 
 function resetFilters(){
-  ['gainRange','ddRange','winRange','wkRange','trRange','subRange'].forEach(id=>{
+  ['moRange','gainRange','ddRange','winRange','wkRange','trRange','subRange'].forEach(id=>{
     const el=document.getElementById(id);
-    const cfg={gainRange:[0,100],ddRange:[0,100],winRange:[0,100],
+    const cfg={moRange:[0,500],gainRange:[0,100],ddRange:[0,100],winRange:[0,100],
                wkRange:[0,500],trRange:[0,5000],subRange:[0,500],priceRange:[0,200]};
     el.noUiSlider.set(cfg[id]);
   });
